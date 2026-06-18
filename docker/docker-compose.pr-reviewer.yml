@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  local-llm-inference:
+    image: ollama/ollama:latest
+    container_name: halo-local-llm
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_MAX_LOADED_MODELS=1
+    networks:
+      - airgapped-review-net
+
+  honcho-memory-engine:
+    image: plasticlabs/honcho:latest
+    container_name: halo-honcho-memory
+    restart: unless-stopped
+    environment:
+      - HONCHO_STORAGE_BACKEND=postgresql
+      - HONCHO_EMBEDDING_PROVIDER=local
+      - HONCHO_LLM_BASE_URL=http://local-llm-inference:11434/v1
+    networks:
+      - airgapped-review-net
+    depends_on:
+      - local-llm-inference
+
+  hermes-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.hermes
+    container_name: halo-hermes-reviewer
+    volumes:
+      - /tmp/pr_diff.patch:/workspace/pr_diff.patch:ro
+      - /tmp:/workspace
+    environment:
+      - HERMES_INFERENCE_URL=http://local-llm-inference:11434/v1
+      - HONCHO_MEMORY_URL=http://honcho-memory-engine:8000
+      - TELEMETRY_DISABLED=true
+      - ZERO_EXTERNAL_EGRESS=enforced
+    networks:
+      - airgapped-review-net
+    depends_on:
+      - honcho-memory-engine
+
+networks:
+  airgapped-review-net:
+    driver: bridge
+    internal: true # Enforces zero external internet egress for proprietary code diffs
+
+volumes:
+  ollama-models:
